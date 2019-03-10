@@ -1,0 +1,288 @@
+---
+title: "Practical Machine Learning Project"
+author: "Jose Manuel Jiménez Gutiérrez"
+date: "March 10th 2019"
+output: 
+  html_document:
+    toc: true
+  
+ 
+  
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,message = F,warning = F)
+```
+
+## Introduction
+
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement – a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: http://web.archive.org/web/20161224072740/http:/groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset).
+
+
+## Aim of the project 
+
+The goal of the project is to predict the manner in which they did the exercise. This is the "classe" variable in the training set. The rest of the other variables will be used to predict with. This issues have to be addressed: 
+
+
+* How the model was built 
+* How was used cross validation
+* What means the out of sample error
+* Explain decission taken in the exercise
+* Use the  prediction model to predict 20 different test cases.
+
+
+
+## R version and packages used
+
+* R version 3.4.3
+* caret
+* dplyr
+* tidyr
+* doParallel
+* cowplot
+
+
+
+
+```{r Load needded libraries, echo=FALSE,warning=FALSE}
+library(caret)
+library(dplyr)
+library(tidyr)
+library(doParallel)
+library(cowplot)
+
+```
+
+
+## Data processing
+
+```{r Read training and test data, echo = F}
+
+df_train <- read.csv("pml-training.csv")
+df_test <- read.csv("pml-testing.csv")
+```
+
+At a first look it was clear that there were a lot of predictors with NA values, blank values and some invalid values like "#DIV/0". So this steps were followed to tidy up the initial data and subset only predictors with reasonable and complete values. 
+
+
+* Complete null values, empty values with NA
+
+```{r Null values}
+df_train_clean <- df_train %>%  mutate_all(list(~na_if(., ""))) %>%  mutate_all(list(~na_if(., "#DIV/0!") ))
+```
+
+* Count NA values per column
+
+```{r NA values}
+
+df_train_clean_summary <- df_train_clean %>%  summarise_all(list(~sum(is.na(.))))
+
+```
+
+
+* Filter columns with  NA values
+
+```{r Filter columns with NA values}
+df_train_columns <- df_train_clean_summary %>% gather(key=pred,value=navalues) %>% dplyr::filter(navalues==0)
+```
+
+
+* Filter train and test dataset by valid columns
+
+```{r Select valid columns}
+df_train_sel <- df_train %>% select(df_train_columns$pred)
+seltest <- df_train_columns$pred[df_train_columns$pred!="classe"]
+df_test_sel <- df_test %>% select(seltest)
+```
+
+* Eliminate columns with no relevance. 
+
+Some columns like the name of the participants, and variables related with timestamps have been considered irrelevant in the construction of the model. Only have been considered those related with measures of the exercises.
+
+```{r Eliminate some predictors}
+norelevance <- c("X","user_name","raw_timestamp_part_1","raw_timestamp_part_2","cvtd_timestamp", "new_window", "num_window")
+df_train_sel  <- df_train_sel %>% select(-norelevance)
+df_test_sel <- df_test_sel %>% select(-norelevance)
+```
+
+* Transformation of the variables: Outcome variable as factor and rest of columns as numeric 
+
+```{r Transformation of the variables}
+df_train_sel$classe <- as.factor(df_train_sel$classe)
+df_train_sel <- df_train_sel %>% mutate_at(vars(-classe),list(~as.numeric(.)))
+
+df_test_sel <- df_test_sel %>% mutate_all(funs(as.numeric(.)))
+```
+
+After this preprocessing, from 159 possible predictors only 52 are going to be used in the model.
+
+## Data analysis
+
+Once the valid predictors have been processed, some exploratory analysis have been done in order to know more about the data. For doing this, box-plot of all the predictors have been plotted in order to know its distribution and for possibly eliminate some outliers of the training set. 
+
+
+```{r Boxplot of the variables, echo=FALSE, fig.width=12, fig.height=10,fig.cap="Figure1: Boxplot of the variables implied in the model"}
+varpreds <- names(df_train_sel)
+
+g_list_boxplot <- lapply(varpreds, function(pred){
+  
+  
+  df_train_sel_pred <- df_train_sel %>% select(pred,classe)
+  if (pred!="classe")
+  {  
+  ggplot()+ geom_boxplot(data=df_train_sel_pred,aes_string(y=pred,x="classe",fill="classe"))+theme(legend.position="none")+
+    theme(axis.title.x= element_text(size=6))+
+    theme(axis.title.y= element_text(size=8,angle=90))+
+    theme(axis.text.x= element_text(size=6))+
+    theme(axis.text.y= element_text(size=6))
+  }
+})  
+
+
+cowplot::plot_grid( plotlist=g_list_boxplot ,nrow = 8,ncol = 7,
+                                   align = 'h', axis = 'tb',label_size=4)
+
+
+```
+
+
+```{r Density plot of the variables, echo=FALSE, fig.width=12, fig.height=10,fig.cap="Figure2: Density plots of the variables implied in the model"}
+varpreds <- names(df_train_sel)
+
+
+g_list_dens <- lapply(varpreds, function(pred){
+  
+  
+  df_train_sel_pred <- df_train_sel %>% select(pred,classe)
+  
+  ggplot()+ geom_density(data=df_train_sel_pred,aes_string(x=pred,colour="classe"))+
+  theme(legend.position="none")+
+  theme(axis.title.y= element_blank())+
+  theme(axis.title.x= element_text(size=6))+
+  theme(axis.title.y= element_text(size=6,angle=90))+
+  theme(axis.text.x= element_text(size=6))+
+  theme(axis.text.y= element_text(size=6))
+    
+  
+})  
+
+
+cowplot::plot_grid( plotlist=g_list_dens ,nrow = 8,ncol = 7,
+                                  align = 'h', axis = 'tb',label_size=4)
+
+```
+
+With this figures it seems clear that there are some **outliers** values to delete in order to have well distributed data. The variables with clear outliers are:
+
+* gyros_dumbbell_z
+* magnet_dumbbell_y 
+* accel_belt_x 
+* gyros_dumbbell_y
+* accel_dumbbell_z
+
+It suppose less than 1 % of values deleted from the training data set.
+
+
+```{r Delete outliers}
+df_train_sel_mod <- df_train_sel %>% dplyr::filter(!gyros_dumbbell_z>300) %>%
+ dplyr::filter(!magnet_dumbbell_y < -3000) %>%  dplyr::filter(!accel_belt_x < -100) %>% 
+  dplyr::filter(!gyros_dumbbell_y > 4) %>% dplyr::filter(!accel_dumbbell_z > 200)
+ 
+
+```
+
+
+Besides of the outliers, can be seen that the "classe" distribution and predictors are **quite well balanced**, although classe A has more cases (30 % more data). In another hand, that there are some predictors that seems to **classify** the outcome like accel_arm_y or magnet_arm_y but in others it seems difficul to guess any relationship. 
+
+
+## Model strategy
+
+
+###Training data separated in training and test set
+
+Since the sample is wide enough with 19433 values, the train data  is going to be splitted in a *training data set* in which the model is going to be trained and a *test set* where the out of sample errors are going to be measured for assess the model.
+
+
+```{r Train and test set}
+set.seed(8484)
+intrain <- createDataPartition(y=df_train_sel_mod$classe,
+                               p=0.7, list=FALSE)
+
+training <- df_train_sel_mod[intrain,]
+testing <- df_train_sel_mod[-intrain,]
+
+```
+
+###Cross validation in training data
+
+
+The strategy of cross validation choosed initially to train the model is a k-fold with 6 folds with no repetition that are assumable with the amount of data we have.  
+
+
+###Models choosed
+
+Two models have been choosed to evaluate the training data: **random forest** and **boosting**. The reason is because they are non linear models that use interaction between variables and perform well with a great number of predictors. In another hand, they can deal with not transfomed variables like in this case. At last they are wide used with success in prediction contests. 
+
+
+Here is the model training:
+
+```{r Model training, eval=F}
+
+cl <- makePSOCKcluster(4)
+registerDoParallel(cl)
+ 
+ 
+modeltrain_rf <- train(classe ~ ., data = training, method = "rf", trControl=trainControl(method="cv",number=6 ))
+ 
+modeltrain_gbm <- train(classe ~ ., data = training, method = "gbm", trControl=trainControl(method="cv",number=6 ))
+ 
+ 
+stopCluster(cl)
+
+saveRDS(file="modeltrain_rf.RDS",modeltrain_rf)
+saveRDS(file="modeltrain_gbm.RDS",modeltrain_gbm)
+
+
+
+```
+
+* RF final model information
+
+```{r RF Model training}
+modeltrain_rf<- readRDS(file="modeltrain_rf.RDS")
+print(modeltrain_rf)
+```
+
+
+* GBM final model information
+```{r GBM Model training}
+modeltrain_gbm<- readRDS(file="modeltrain_gbm.RDS")
+print(modeltrain_rf)
+```
+
+
+###Models assesment in test data set
+
+Once we have this models we use in the test data set to predict how well behaves in an out of sample dataset. This can give us an idea of the performance in the testing data of the project (pml-testing)
+
+```{r Model prediction with testing sample}
+testpred_rf <- predict(modeltrain_rf,testing)
+testpred_gbm <- predict(modeltrain_gbm,testing) 
+```
+
+With this prediction, calculating the accuracy with function ConfussionMatrix we have a very good performance of the two models. **Random forest** model the choosed with its best accuracy.
+
+```{r Accuracy calculation}
+confusionMatrix(testpred_rf,testing$classe)
+confusionMatrix(testpred_gbm,testing$classe)
+```
+
+## Predicting the pml-testing data set
+
+Now we can calculate the predictions with the model
+
+```{r Predictions in test data}
+testpredfinal_rf <- predict(modeltrain_rf,df_test_sel)
+```
+
